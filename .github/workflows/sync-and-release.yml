@@ -30,15 +30,15 @@ jobs:
         run: |
           git remote add upstream https://github.com/korotovsky/slack-mcp-server.git || true
           git fetch upstream
-          git checkout main
-          git merge upstream/main --no-edit || true
-          git push origin main
+          git checkout master
+          git merge upstream/master --no-edit || true
+          git push origin master
 
       - name: Check for changes
         id: check
         run: |
-          UPSTREAM_SHA=$(git rev-parse upstream/main)
-          FORK_SHA=$(git rev-parse origin/main~1 2>/dev/null || echo "none")
+          UPSTREAM_SHA=$(git rev-parse upstream/master)
+          FORK_SHA=$(git rev-parse origin/master~1 2>/dev/null || echo "none")
           if [ "$UPSTREAM_SHA" != "$FORK_SHA" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
@@ -67,7 +67,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: master
 
       - name: Set up Go
         uses: actions/setup-go@v5
