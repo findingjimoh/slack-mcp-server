@@ -543,8 +543,8 @@ func TestUnitLimitByExpression_Valid(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected no error for %q, got %v", tt.input, err)
 			}
-			if slackLimit != 100 {
-				t.Errorf("expected slackLimit=100 for %q, got %d", tt.input, slackLimit)
+			if slackLimit != 999 {
+				t.Errorf("expected slackLimit=999 for %q, got %d", tt.input, slackLimit)
 			}
 
 			// Parse the "1234567890.000000" format back to an integer

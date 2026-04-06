@@ -157,6 +157,7 @@ type SlackAPI interface {
 
 	// Edge API methods
 	ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error)
+	ClientCounts(ctx context.Context) (edge.ClientCountsResponse, error)
 }
 
 type MCPSlackClient struct {
@@ -182,16 +183,16 @@ type ApiProvider struct {
 	minRefreshInterval time.Duration
 
 	// Users cache: atomic pointer to immutable snapshot (no copy on read)
-	usersSnapshot atomic.Pointer[UsersCache]
-	usersCachePath string
-	usersReady     bool
+	usersSnapshot          atomic.Pointer[UsersCache]
+	usersCachePath         string
+	usersReady             bool
 	lastForcedUsersRefresh time.Time
 	usersMu                sync.RWMutex // protects usersReady, lastForcedUsersRefresh
 
 	// Channels cache: atomic pointer to immutable snapshot (no copy on read)
-	channelsSnapshot atomic.Pointer[ChannelsCache]
-	channelsCachePath string
-	channelsReady     bool
+	channelsSnapshot          atomic.Pointer[ChannelsCache]
+	channelsCachePath         string
+	channelsReady             bool
 	lastForcedChannelsRefresh time.Time
 	channelsMu                sync.RWMutex // protects channelsReady, lastForcedChannelsRefresh
 }
@@ -380,6 +381,10 @@ func (c *MCPSlackClient) GetFileContext(ctx context.Context, downloadURL string,
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {
 	return c.edgeClient.ClientUserBoot(ctx)
+}
+
+func (c *MCPSlackClient) ClientCounts(ctx context.Context) (edge.ClientCountsResponse, error) {
+	return c.edgeClient.ClientCounts(ctx)
 }
 
 func (c *MCPSlackClient) IsEnterprise() bool {
@@ -1002,6 +1007,10 @@ func (ap *ApiProvider) ServerTransport() string {
 
 func (ap *ApiProvider) Slack() SlackAPI {
 	return ap.client
+}
+
+func (ap *ApiProvider) GetClientCounts(ctx context.Context) (edge.ClientCountsResponse, error) {
+	return ap.client.ClientCounts(ctx)
 }
 
 func (ap *ApiProvider) IsBotToken() bool {

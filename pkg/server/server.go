@@ -133,6 +133,24 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), conversationsHandler.ReactionsRemoveHandler)
 
+	s.AddTool(mcp.NewTool("conversations_mark",
+		mcp.WithDescription("Mark a conversation as read or unread. To mark as read, provide the timestamp of the latest message. To mark as unread from a specific message, set unread=true and provide that message's timestamp."),
+		mcp.WithTitleAnnotation("Mark Conversation Read/Unread"),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
+		),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Timestamp of the message to mark as read up to (or to mark as unread from), in format 1234567890.123456."),
+		),
+		mcp.WithBoolean("unread",
+			mcp.Description("If true, marks the conversation as unread starting from the specified message. If false (default), marks as read up to that message."),
+			mcp.DefaultBool(false),
+		),
+	), conversationsHandler.ConversationsMarkHandler)
+
 	s.AddTool(mcp.NewTool("attachment_get_data",
 		mcp.WithDescription("Download an attachment's content by file ID. Returns file metadata and content (text files as-is, binary files as base64). Maximum file size is 5MB."),
 		mcp.WithTitleAnnotation("Get Attachment Data"),
@@ -182,7 +200,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request."),
 		),
 		mcp.WithNumber("limit",
-			mcp.DefaultNumber(20),
+			mcp.DefaultNumber(100),
 			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 100."),
 		),
 	)
@@ -212,6 +230,32 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request."),
 		),
 	), channelsHandler.ChannelsHandler)
+
+	s.AddTool(mcp.NewTool("conversations_counts",
+		mcp.WithDescription("Get unread status, latest message timestamp, last-read timestamp, and mention count for all channels, DMs, and group DMs. Returns real-time data from Slack. Use this to efficiently identify conversations needing attention or before bulk mark-as-read operations."),
+		mcp.WithTitleAnnotation("Get Conversation Counts"),
+		mcp.WithReadOnlyHintAnnotation(true),
+	), channelsHandler.ClientCountsHandler)
+
+	triageHandler := handler.NewTriageHandler(provider, logger)
+	triageTool := mcp.NewTool("slack_triage",
+		mcp.WithDescription("Get all Slack DMs, mentions, and thread replies needing attention in a single call. Applies the 'needing attention' heuristic server-side: skips messages you reacted to (except eyes), replied to, or replied in thread. Returns JSON with dms, mentions, thread_replies, and stats."),
+		mcp.WithTitleAnnotation("Triage Slack Unreads"),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("lookback_days", mcp.DefaultString("3"),
+			mcp.Description("Number of days to look back for mentions and thread replies. Default: 3."),
+		),
+		mcp.WithBoolean("include_mentions", mcp.DefaultBool(true),
+			mcp.Description("Include @mentions from channels. Default: true."),
+		),
+		mcp.WithBoolean("include_thread_replies", mcp.DefaultBool(true),
+			mcp.Description("Include thread reply sweep. Default: true."),
+		),
+	)
+	// Requires search API (not available to bot tokens) and edge API for client.counts
+	if !provider.IsBotToken() {
+		s.AddTool(triageTool, triageHandler.TriageUnreadsHandler)
+	}
 
 	logger.Info("Authenticating with Slack API...",
 		zap.String("context", "console"),

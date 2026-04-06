@@ -24,6 +24,14 @@ type Channel struct {
 	Cursor      string `json:"cursor"`
 }
 
+type ChannelCount struct {
+	ID           string `csv:"ID"`
+	HasUnreads   bool   `csv:"HasUnreads"`
+	LatestTs     string `csv:"LatestTs"`
+	LastReadTs   string `csv:"LastReadTs"`
+	MentionCount int    `csv:"MentionCount"`
+}
+
 type ChannelsHandler struct {
 	apiProvider *provider.ApiProvider
 	validTypes  map[string]bool
@@ -310,4 +318,52 @@ func paginateChannels(channels []provider.Channel, cursor string, limit int) ([]
 	)
 
 	return paged, nextCursor
+}
+
+func (ch *ChannelsHandler) ClientCountsHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ClientCountsHandler called")
+
+	resp, err := ch.apiProvider.GetClientCounts(ctx)
+	if err != nil {
+		ch.logger.Error("Failed to get client counts", zap.Error(err))
+		return nil, err
+	}
+
+	var counts []ChannelCount
+
+	for _, snap := range resp.Channels {
+		counts = append(counts, ChannelCount{
+			ID:           snap.ID,
+			HasUnreads:   snap.HasUnreads,
+			LatestTs:     snap.Latest.SlackString(),
+			LastReadTs:   snap.LastRead.SlackString(),
+			MentionCount: snap.MentionCount,
+		})
+	}
+	for _, snap := range resp.MPIMs {
+		counts = append(counts, ChannelCount{
+			ID:           snap.ID,
+			HasUnreads:   snap.HasUnreads,
+			LatestTs:     snap.Latest.SlackString(),
+			LastReadTs:   snap.LastRead.SlackString(),
+			MentionCount: snap.MentionCount,
+		})
+	}
+	for _, snap := range resp.IMs {
+		counts = append(counts, ChannelCount{
+			ID:           snap.ID,
+			HasUnreads:   snap.HasUnreads,
+			LatestTs:     snap.Latest.SlackString(),
+			LastReadTs:   snap.LastRead.SlackString(),
+			MentionCount: snap.MentionCount,
+		})
+	}
+
+	csvBytes, err := gocsv.MarshalBytes(&counts)
+	if err != nil {
+		ch.logger.Error("Failed to marshal channel counts to CSV", zap.Error(err))
+		return nil, err
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
 }

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	defaultConversationsNumericLimit    = 50
+	defaultConversationsNumericLimit    = 200
 	defaultConversationsExpressionLimit = "1d"
 	maxFileSizeBytes                    = 5 * 1024 * 1024 // 5MB limit
 )
@@ -41,20 +41,20 @@ var validFilterKeys = map[string]struct{}{
 }
 
 type Message struct {
-	MsgID     string `json:"msgID"`
-	UserID    string `json:"userID"`
-	UserName  string `json:"userUser"`
-	RealName  string `json:"realName"`
-	Channel   string `json:"channelID"`
-	ThreadTs  string `json:"ThreadTs"`
-	Text      string `json:"text"`
-	Time      string `json:"time"`
-	Reactions string `json:"reactions,omitempty"`
-	BotName   string `json:"botName,omitempty"`
-	FileCount int    `json:"fileCount,omitempty"`
-	AttachmentIDs   string `json:"attachmentIDs,omitempty"`
-	HasMedia  bool   `json:"hasMedia,omitempty"`
-	Cursor    string `json:"cursor"`
+	MsgID         string `json:"msgID"`
+	UserID        string `json:"userID"`
+	UserName      string `json:"userUser"`
+	RealName      string `json:"realName"`
+	Channel       string `json:"channelID"`
+	ThreadTs      string `json:"ThreadTs"`
+	Text          string `json:"text"`
+	Time          string `json:"time"`
+	Reactions     string `json:"reactions,omitempty"`
+	BotName       string `json:"botName,omitempty"`
+	FileCount     int    `json:"fileCount,omitempty"`
+	AttachmentIDs string `json:"attachmentIDs,omitempty"`
+	HasMedia      bool   `json:"hasMedia,omitempty"`
+	Cursor        string `json:"cursor"`
 }
 
 type User struct {
@@ -89,6 +89,12 @@ type addReactionParams struct {
 	channel   string
 	timestamp string
 	emoji     string
+}
+
+type markParams struct {
+	channel   string
+	timestamp string
+	unread    bool
 }
 
 type filesGetParams struct {
@@ -322,6 +328,56 @@ func (ch *ConversationsHandler) ReactionsRemoveHandler(ctx context.Context, requ
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Successfully removed :%s: reaction from message %s in channel %s", params.emoji, params.timestamp, params.channel)), nil
+}
+
+// ConversationsMarkHandler marks a conversation as read up to a given timestamp
+func (ch *ConversationsHandler) ConversationsMarkHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ConversationsMarkHandler called", zap.Any("params", request.Params))
+
+	if ready, err := ch.apiProvider.IsReady(); !ready {
+		ch.logger.Error("API provider not ready", zap.Error(err))
+		return nil, err
+	}
+
+	params, err := ch.parseParamsToolMark(ctx, request)
+	if err != nil {
+		ch.logger.Error("Failed to parse mark params", zap.Error(err))
+		return nil, err
+	}
+
+	markTs := params.timestamp
+	action := "read"
+	if params.unread {
+		// To mark as unread from a message, set the read cursor to just before it.
+		// Slack timestamps are "seconds.microseconds" — decrement by 1 microsecond.
+		parts := strings.SplitN(params.timestamp, ".", 2)
+		if len(parts) == 2 {
+			micro, err := strconv.Atoi(parts[1])
+			if err == nil && micro > 0 {
+				markTs = fmt.Sprintf("%s.%06d", parts[0], micro-1)
+			} else if err == nil && micro == 0 {
+				secs, err := strconv.ParseInt(parts[0], 10, 64)
+				if err == nil {
+					markTs = fmt.Sprintf("%d.%06d", secs-1, 999999)
+				}
+			}
+		}
+		action = "unread"
+	}
+
+	ch.logger.Debug("Marking conversation",
+		zap.String("channel", params.channel),
+		zap.String("timestamp", markTs),
+		zap.String("action", action),
+	)
+
+	err = ch.apiProvider.Slack().MarkConversationContext(ctx, params.channel, markTs)
+	if err != nil {
+		ch.logger.Error("Slack MarkConversationContext failed", zap.Error(err))
+		return nil, err
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Successfully marked channel %s as %s (cursor: %s)", params.channel, action, markTs)), nil
 }
 
 func (ch *ConversationsHandler) FilesGetHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -642,19 +698,19 @@ func (ch *ConversationsHandler) convertMessagesFromHistory(slackMessages []slack
 		attachmentIDsStr := strings.Join(attachmentIDs, ",")
 
 		messages = append(messages, Message{
-			MsgID:     msg.Timestamp,
-			UserID:    msg.User,
-			UserName:  userName,
-			RealName:  realName,
-			Text:      text.ProcessText(msgText),
-			Channel:   channel,
-			ThreadTs:  msg.ThreadTimestamp,
-			Time:      timestamp,
-			Reactions: reactionsString,
-			BotName:   botName,
-			FileCount: fileCount,
-			AttachmentIDs:   attachmentIDsStr,
-			HasMedia:  hasMedia,
+			MsgID:         msg.Timestamp,
+			UserID:        msg.User,
+			UserName:      userName,
+			RealName:      realName,
+			Text:          text.ProcessText(msgText),
+			Channel:       channel,
+			ThreadTs:      msg.ThreadTimestamp,
+			Time:          timestamp,
+			Reactions:     reactionsString,
+			BotName:       botName,
+			FileCount:     fileCount,
+			AttachmentIDs: attachmentIDsStr,
+			HasMedia:      hasMedia,
 		})
 	}
 
@@ -878,6 +934,44 @@ func (ch *ConversationsHandler) parseParamsToolReaction(ctx context.Context, req
 		channel:   channel,
 		timestamp: timestamp,
 		emoji:     emoji,
+	}, nil
+}
+
+func (ch *ConversationsHandler) parseParamsToolMark(ctx context.Context, request mcp.CallToolRequest) (*markParams, error) {
+	toolConfig := os.Getenv("SLACK_MCP_MARK_TOOL")
+	if toolConfig == "" {
+		ch.logger.Error("Mark tool disabled by default")
+		return nil, errors.New(
+			"by default, the conversations_mark tool is disabled. " +
+				"To enable it, set the SLACK_MCP_MARK_TOOL environment variable to true or 1",
+		)
+	}
+	if toolConfig != "true" && toolConfig != "1" && toolConfig != "yes" {
+		ch.logger.Error("Mark tool disabled", zap.String("config", toolConfig))
+		return nil, errors.New("SLACK_MCP_MARK_TOOL must be set to 'true', '1', or 'yes' to enable")
+	}
+
+	channel := request.GetString("channel_id", "")
+	if channel == "" {
+		return nil, errors.New("channel_id is required")
+	}
+	channel, err := ch.resolveChannelID(ctx, channel)
+	if err != nil {
+		ch.logger.Error("Channel not found", zap.String("channel", channel), zap.Error(err))
+		return nil, err
+	}
+
+	timestamp := request.GetString("timestamp", "")
+	if timestamp == "" {
+		return nil, errors.New("timestamp is required")
+	}
+
+	unread := request.GetBool("unread", false)
+
+	return &markParams{
+		channel:   channel,
+		timestamp: timestamp,
+		unread:    unread,
 	}, nil
 }
 
@@ -1105,7 +1199,7 @@ func limitByExpression(limit, defaultLimit string) (slackLimit int, oldest, late
 	}
 	latest = fmt.Sprintf("%d.000000", now.Unix())
 	oldest = fmt.Sprintf("%d.000000", oldestTime.Unix())
-	return 100, oldest, latest, nil
+	return 999, oldest, latest, nil
 }
 
 func extractThreadTS(rawurl string) (string, error) {
